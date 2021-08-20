@@ -1186,7 +1186,6 @@ fn search_selection(cx: &mut Context) {
     let query = doc.selection(view.id).primary().fragment(contents);
     let regex = regex::escape(&query);
     cx.editor.registers.write('\\', vec![regex]);
-    search_next(cx);
 }
 
 fn extend_line(cx: &mut Context) {
