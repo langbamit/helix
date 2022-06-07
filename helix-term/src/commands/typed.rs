@@ -2,8 +2,11 @@ use std::ops::Deref;
 
 use super::*;
 
+use helix_core::Position;
 use helix_view::editor::{Action, ConfigEvent};
 use ui::completers::{self, Completer};
+
+use std::path::PathBuf;
 
 #[derive(Clone)]
 pub struct TypableCommand {
@@ -54,13 +57,46 @@ fn open(cx: &mut compositor::Context, args: &[Cow<str>], event: PromptEvent) -> 
     }
 
     ensure!(!args.is_empty(), "wrong argument count");
-    for arg in args {
-        let (path, pos) = args::parse_file(arg);
-        let _ = cx.editor.open(&path, Action::Replace)?;
+    let files: Vec<(PathBuf, Position)> = args.iter().map(|s| args::parse_file(s)).collect();
+    open_impl(cx, files, Action::Replace)
+}
+
+pub(crate) fn open_impl(
+    cx: &mut compositor::Context,
+    files: Vec<(PathBuf, Position)>,
+    action: Action,
+) -> anyhow::Result<()> {
+    ensure!(!files.is_empty(), "wrong files count");
+    let first = helix_core::path::expand_tilde(&files[0].0);
+    if first.is_dir() {
+        let callback = async move {
+            let call: job::Callback =
+                Box::new(move |editor: &mut Editor, compositor: &mut Compositor| {
+                    let picker = ui::file_picker(first, &editor.config());
+                    let component: Box<dyn Component> = Box::new(overlayed(picker));
+                    compositor.push(component);
+                });
+            Ok(call)
+        };
+        cx.jobs.callback(callback);
+    } else {
+        let nr_of_files = files.len();
+        for (file, pos) in files {
+            if file.is_dir() {
+                return Err(anyhow::anyhow!(
+                    "expected a path to file, found a directory. (to open a directory pass it as first argument)"
+                ));
+            }
+            let _ = cx.editor.open(&file, action)?;
+            let (view, doc) = current!(cx.editor);
+            let pos = Selection::point(pos_at_coords(doc.text().slice(..), pos, true));
+            doc.set_selection(view.id, pos);
+        }
+        cx.editor
+            .set_status(format!("Loaded {} files.", nr_of_files));
+        // align the view to center after all files are loaded,
+        // does not affect views without pos since it is at the top
         let (view, doc) = current!(cx.editor);
-        let pos = Selection::point(pos_at_coords(doc.text().slice(..), pos, true));
-        doc.set_selection(view.id, pos);
-        // does not affect opening a buffer without pos
         align_view(doc, view, Align::Center);
     }
     Ok(())

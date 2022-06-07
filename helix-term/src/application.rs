@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::{
     args::Args,
-    commands::apply_workspace_edit,
+    commands::{apply_workspace_edit, open_impl},
     compositor::Compositor,
     config::Config,
     job::Jobs,
@@ -131,6 +131,7 @@ impl Application {
                 &config.editor
             })),
         );
+        let mut jobs = Jobs::new();
 
         let keys = Box::new(Map::new(Arc::clone(&config), |config: &Config| {
             &config.keys
@@ -144,50 +145,13 @@ impl Application {
             // Unset path to prevent accidentally saving to the original tutor file.
             doc_mut!(editor).set_path(None)?;
         } else if !args.files.is_empty() {
-            let first = &args.files[0].0; // we know it's not empty
-            if first.is_dir() {
-                std::env::set_current_dir(&first).context("set current dir")?;
-                editor.new_file(Action::VerticalSplit);
-                let picker = ui::file_picker(".".into(), &config.load().editor);
-                compositor.push(Box::new(overlayed(picker)));
-            } else {
-                let nr_of_files = args.files.len();
-                for (i, (file, pos)) in args.files.into_iter().enumerate() {
-                    if file.is_dir() {
-                        return Err(anyhow::anyhow!(
-                            "expected a path to file, found a directory. (to open a directory pass it as first argument)"
-                        ));
-                    } else {
-                        // If the user passes in either `--vsplit` or
-                        // `--hsplit` as a command line argument, all the given
-                        // files will be opened according to the selected
-                        // option. If neither of those two arguments are passed
-                        // in, just load the files normally.
-                        let action = match args.split {
-                            _ if i == 0 => Action::VerticalSplit,
-                            Some(Layout::Vertical) => Action::VerticalSplit,
-                            Some(Layout::Horizontal) => Action::HorizontalSplit,
-                            None => Action::Load,
-                        };
-                        let doc_id = editor
-                            .open(&file, action)
-                            .context(format!("open '{}'", file.to_string_lossy()))?;
-                        // with Action::Load all documents have the same view
-                        // NOTE: this isn't necessarily true anymore. If
-                        // `--vsplit` or `--hsplit` are used, the file which is
-                        // opened last is focused on.
-                        let view_id = editor.tree.focus;
-                        let doc = editor.document_mut(doc_id).unwrap();
-                        let pos = Selection::point(pos_at_coords(doc.text().slice(..), pos, true));
-                        doc.set_selection(view_id, pos);
-                    }
-                }
-                editor.set_status(format!("Loaded {} files.", nr_of_files));
-                // align the view to center after all files are loaded,
-                // does not affect views without pos since it is at the top
-                let (view, doc) = current!(editor);
-                align_view(doc, view, Align::Center);
-            }
+            editor.new_file(Action::VerticalSplit);
+            let mut cx = crate::compositor::Context {
+                editor: &mut editor,
+                jobs: &mut jobs,
+                scroll: None,
+            };
+            open_impl(&mut cx, args.files, Action::Replace)?;
         } else if stdin().is_tty() || cfg!(feature = "integration") {
             editor.new_file(Action::VerticalSplit);
         } else if cfg!(target_os = "macos") {
@@ -219,7 +183,7 @@ impl Application {
             syn_loader,
 
             signals,
-            jobs: Jobs::new(),
+            jobs,
             lsp_progress: LspProgressMap::new(),
             last_render: Instant::now(),
         };
