@@ -98,7 +98,7 @@
           }
           ''
             cp -rs --no-preserve=mode,ownership ${old} $out
-            wrapProgram "$out/bin/hx" ''${makeWrapperArgs[@]} --set HELIX_RUNTIME "${runtimeDir}"
+            wrapProgram "$out/bin/hx" "''${makeWrapperArgs[@]}" --set HELIX_RUNTIME "${runtimeDir}"
           '';
       in
         helix-wrapped
